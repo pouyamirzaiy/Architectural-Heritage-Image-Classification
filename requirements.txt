@@ -2,4 +2,7 @@ numpy
 pandas
 matplotlib
 seaborn
+torch
 scikit-learn
+joblib
+tqdm
