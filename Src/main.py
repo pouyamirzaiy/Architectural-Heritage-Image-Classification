@@ -1,72 +1,64 @@
-import pandas as pd
 import torch
-from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, TensorDataset
+from data_preprocessing import prepare_data, get_dataloaders
+from model import ResNet, ResidualBlock
+from train import train_model
+from evaluate import test_model
+from visualize import visualize_feature_maps, plot_heatmap_with_image
+from utils import generate_image_for_class, deconvolution
 
-from data_preprocessing import preprocess_data
-from eda import eda
-from model import MLP
-from train import train_model, calculate_accuracy
-from hyperparameter_tuning import hyperparameter_tuning, plot_hyperparameter_tuning_results
-from evaluation import evaluate_model
-from visualization import plot_training_results, plot_feature_importance
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load and preprocess data
-file_path = 'path/to/your/dataset.csv'
-df = preprocess_data(file_path)
+# Define paths and class names
+data_root = '/kaggle/input/architectural-heritage-elements-image64-dataset'
+train_dir = 'train'
+test_dir = 'test'
+val_dir = 'val'
+class_names = ['altar', 'apse', 'bell_tower', 'column', 'dome(inner)', 'dome(outer)', 'flying_buttress', 'gargoyle', 'stained_glass', 'vault']
 
-# Perform EDA
-eda(df)
+# Prepare data
+prepare_data(data_root, train_dir, test_dir, val_dir, class_names)
 
-# Split data into train and test sets
-X = df.drop('No-show', axis=1)
-y = df['No-show']
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# Get dataloaders
+batch_size = 128
+train_dataloader, val_dataloader, test_dataloader = get_dataloaders(train_dir, val_dir, test_dir, batch_size)
 
-# Convert data to PyTorch tensors
-X_train_tensor = torch.tensor(X_train.values, dtype=torch.float32)
-y_train_tensor = torch.tensor(y_train.values.reshape(-1, 1), dtype=torch.float32)
-X_test_tensor = torch.tensor(X_test.values, dtype=torch.float32)
-y_test_tensor = torch.tensor(y_test.values.reshape(-1, 1), dtype=torch.float32)
-
-# Define model parameters
-input_size = X.shape[1]
-hidden_size = 128
-output_size = 1
-num_hidden_layers = 2
-num_epochs = 30
-batch_size = 64
-
-# Create DataLoader
-train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-# Initialize model, criterion, and optimizer
-model = MLP(input_size, hidden_size, output_size, num_hidden_layers)
-criterion = torch.nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
+# Initialize model, loss, optimizer, and scheduler
+model = ResNet(ResidualBlock, [3, 4, 6, 3]).to(device)
+loss = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01, weight_decay=0.001, momentum=0.9)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 
 # Train the model
-model = train_model(model, criterion, optimizer, train_loader, num_epochs)
+train_model(model, loss, optimizer, scheduler, num_epochs=50, train_dataloader=train_dataloader, val_dataloader=val_dataloader, device=device)
 
-# Evaluate the model
-test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-mse, mae, accuracy, precision, recall, f1 = evaluate_model(model, test_loader)
+# Test the model
+test_model(model, test_dataloader, loss, device)
 
-print(f'Mean Squared Error (MSE): {mse:.4f}')
-print(f'Mean Absolute Error (MAE): {mae:.4f}')
-print(f'Accuracy: {accuracy:.4f}')
-print(f'Precision: {precision:.4f}')
-print(f'Recall: {recall:.4f}')
-print(f'F1 Score: {f1:.4f}')
+# Visualize feature maps
+for images, _ in test_dataloader:
+    image = images[1]
+    break
+image = image.unsqueeze(0).to(device)
+visualized_feature_maps = visualize_feature_maps(model, image, layer_id=1, device=device)
+plot_heatmap_with_image(visualized_feature_maps, image, cmap='hot', alpha=0.8, vmin=0.2, vmax=0.8)
 
-# Perform hyperparameter tuning
-results = hyperparameter_tuning(X_train_tensor, y_train_tensor, input_size, hidden_size, output_size, num_hidden_layers)
-plot_hyperparameter_tuning_results(results, num_epochs)
+# Generate and deconvolve image for a specific class
+target_class_index = 5  # Change this to the desired class index
+generated_image = generate_image_for_class(model, target_class_index, device=device)
+deconvolved_image = deconvolution(model, generated_image, target_class_index, device=device)
 
-# Plot training results
-plot_training_results(results['train_losses'][0], results['train_accuracies'][0], num_epochs)
+# Visualize the generated and deconvolved images
+import matplotlib.pyplot as plt
+plt.figure(figsize=(12, 6))
+plt.subplot(1, 2, 1)
+plt.imshow(generated_image)
+plt.title('Generated Image for Class: ' + class_names[target_class_index])
+plt.axis('off')
 
-# Plot feature importance
-plot_feature_importance(df)
+plt.subplot(1, 2, 2)
+plt.imshow(deconvolved_image)
+plt.title('Deconvolved Image')
+plt.axis('off')
+
+plt.show()

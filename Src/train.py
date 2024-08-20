@@ -1,41 +1,46 @@
 import torch
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from sklearn.metrics import classification_report, confusion_matrix
+from tqdm import tqdm
 
-def train_model(model, criterion, optimizer, dataloader, num_epochs=30):
+def train_model(model, loss, optimizer, scheduler, num_epochs, train_dataloader, val_dataloader, device):
     for epoch in range(num_epochs):
-        model.train()
-        running_loss = 0.0
-        
-        for inputs, targets in dataloader:
-            optimizer.zero_grad()
-            
-            # Forward pass
-            outputs = model(inputs)
-            loss = criterion(outputs.squeeze(), targets)
-            
-            # Backward pass and optimization
-            loss.backward()
-            optimizer.step()
-            
-            running_loss += loss.item() * inputs.size(0)
-        
-        epoch_loss = running_loss / len(dataloader.dataset)
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}')
-    
-    return model
+        print('Epoch {}/{}:'.format(epoch, num_epochs - 1), flush=True)
 
-def calculate_accuracy(model, dataloader):
-    model.eval()
-    correct = 0
-    total = 0
-    
-    with torch.no_grad():
-        for inputs, targets in dataloader:
-            outputs = model(inputs)
-            predicted = torch.round(outputs).squeeze()
-            correct += (predicted == targets).sum().item()
-            total += targets.size(0)
-    
-    accuracy = correct / total
-    return accuracy
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                dataloader = train_dataloader
+                scheduler.step()
+                model.train()
+            else:
+                dataloader = val_dataloader
+                model.eval()
+
+            running_loss = 0.
+            running_acc = 0.
+            all_labels = []
+            all_preds = []
+
+            for inputs, labels in tqdm(dataloader):
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                optimizer.zero_grad()
+
+                with torch.set_grad_enabled(phase == 'train'):
+                    preds = model(inputs)
+                    loss_value = loss(preds, labels)
+                    preds_class = preds.argmax(dim=1)
+
+                    if phase == 'train':
+                        loss_value.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
+                        optimizer.step()
+
+                running_loss += loss_value.item()
+                running_acc += (preds_class == labels.data).float().mean()
+                all_labels += labels.tolist()
+                all_preds += preds_class.tolist()
+
+            epoch_loss = running_loss / len(dataloader)
+            epoch_acc = running_acc / len(dataloader)
+
+            print('{} Loss: {:.4f}
